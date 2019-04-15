@@ -1,6 +1,7 @@
 from datetime import datetime
 from os import getenv
 
+from dateutil.parser import parse
 from google.cloud import datastore
 from elasticsearch import Elasticsearch
 
@@ -26,9 +27,16 @@ def convert_datastore_datetime(field):
     return dt
 
 
-def get_spider_results(client):
+def get_spider_results(client, newer_than=None):
     query = client.query(kind=spider_results_kind,
                          order=['-created'])
+    
+
+    if newer_than is None:
+        print("Fetching all results from database")
+    else:
+        print("Fetching results from database newer than %s" % newer_than.isoformat())
+        query.add_filter('created', '>', newer_than.isoformat())
 
     for entity in query.fetch(eventual=True):
         created = convert_datastore_datetime(entity.get('created'))
@@ -43,9 +51,24 @@ def get_spider_results(client):
         }
 
 
+def last_updated(es):
+        """
+        Returns the most recent created date from the
+        spider-results index
+        """
+        res = es.search(index=es_index_name,
+            _source_include=['created'],
+            body={"query": {"match_all": {}}},
+            sort='created:desc',
+            size=1)
+
+        return res['hits']['hits'][0]['_source']['created']
+
+
 def main():
+    print("Connecting to elasticsearch:9200...")
     es = Elasticsearch([{'host': 'elasticsearch', 'port': 9200}])
-    es.cluster.health(wait_for_status='yellow', request_timeout=1)
+    es.cluster.health(wait_for_status='yellow', request_timeout=20)
 
     settings = {
         "index.mapping.total_fields.limit": 2000,
@@ -68,15 +91,15 @@ def main():
 
     mappings = {
         "properties": {
-            "url": {"type": "string", "analyzer": "my_autocomplete_analyzer"},
+            "url": {"type": "text", "analyzer": "my_autocomplete_analyzer"},
             "meta": {
                 "dynamic": "false",
                 "properties": {
                     "type": {"type": "keyword"},
                     "level": {"type": "keyword"},
-                    "city": {"type": "string", "analyzer": "my_autocomplete_analyzer"},
-                    "district": {"type": "string", "analyzer": "my_autocomplete_analyzer"},
-                    "state": {"type": "string", "analyzer": "my_autocomplete_analyzer"},
+                    "city": {"type": "text", "analyzer": "my_autocomplete_analyzer"},
+                    "district": {"type": "text", "analyzer": "my_autocomplete_analyzer"},
+                    "state": {"type": "text", "analyzer": "my_autocomplete_analyzer"},
                 }
             },
             "checks": {"dynamic": "false", "properties": {}},
@@ -86,7 +109,10 @@ def main():
         }
     }
 
+    # Sometimes useful in development
     #es.indices.delete(index=es_index_name)
+
+    time_threshold = None
 
     if not es.indices.exists(index=es_index_name):
         es.indices.create(index=es_index_name, ignore=400)
@@ -94,12 +120,13 @@ def main():
         es.indices.put_settings(index=es_index_name, body=settings)
         es.indices.put_mapping(index=es_index_name, doc_type='result', body=mappings)
         es.indices.open(index=es_index_name)
-
-    # TODO: get newest dataset creation date in index (if any)
+    else:
+        time_threshold = last_updated(es)
+        time_threshold = parse(time_threshold)
 
     # Index database content
     count = 0
-    for doc in get_spider_results(datastore_client):
+    for doc in get_spider_results(datastore_client, newer_than=time_threshold):
         es.index(index=es_index_name, doc_type='result', id=doc['url'], body=doc)
         count += 1
 
