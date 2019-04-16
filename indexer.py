@@ -36,7 +36,7 @@ def get_spider_results(client, newer_than=None):
         print("Fetching all results from database")
     else:
         print("Fetching results from database newer than %s" % newer_than.isoformat())
-        query.add_filter('created', '>', newer_than.isoformat())
+        query.add_filter('created', '>', newer_than)
 
     for entity in query.fetch(eventual=True):
         created = convert_datastore_datetime(entity.get('created'))
