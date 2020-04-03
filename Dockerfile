@@ -1,8 +1,11 @@
-FROM python:3.7-stretch
+FROM python:3.7-buster
 
 ENV PYTHONUNBUFFERED "yes"
 
-RUN pip install google-cloud-datastore==1.7.3 elasticsearch==6.3.1 python-dateutil==2.8.0
+ADD requirements.txt /requirements.txt
+
+RUN pip install --upgrade pip && \
+    pip install -r /requirements.txt
 
 COPY indexer.py /
 
